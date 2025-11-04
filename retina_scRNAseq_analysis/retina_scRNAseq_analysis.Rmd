@@ -1,5 +1,5 @@
 ---
-title: "Seurat scRNAseq Workflow"
+title: "Seurat scRNAseq workflow using retina datasets"
 author: "Reinnier Padilla"
 date: "November 3, 2025"
 ---
@@ -10,7 +10,7 @@ knitr::opts_chunk$set(echo = TRUE)
 
 # Set up
 
-```{r,warning=FALSE,message=FALSE}
+```{r}
 library(data.table)
 library(tidyverse)
 library(Seurat)
@@ -18,11 +18,11 @@ library(patchwork)
 library(reactable)
 ```
 
-# MacCarroll retina
+# McCarroll retina datasets
 
 I will be going over analysis of single-cell RNA-seq data from mouse retina, obtained at postnatal day 14. Fresh tissue was dissected, dissociated, and the cell suspension was immediately subjected to the Drop-seq protocol for cell capture and sequencing.
 
-I will start from the Drop-seq output (a matrix of read counts per gene, per cell) of the MacCarrol samples, and perform basic quality control, dimensionality reduction and clustering. Afterwards, I will move onto analyzing the cell populations obtained, infer their cell-type identity and obtain their gene signatures.
+I will start from the Drop-seq output (a matrix of read counts per gene, per cell) of samples from the McCarrol lab, and perform basic quality control, dimensionality reduction and clustering. Afterwards, I will move onto analyzing the cell populations obtained, infer their cell-type identity and obtain their gene signatures.
 
 ## Import
 
@@ -30,14 +30,16 @@ Load gene count estimates per cell, and build the basic Seurat object
 
 ```{r}
 set.seed(42)
-DGEmatrix <- data.table::fread('Dropseq_p14_retina_Mccarroll.txt', sep = "\t") %>% 
+DGEmatrix <- data.table::fread("~/Documents/scPipeline/scratch/retinaData/Dropseq_p14_retina_Mccarroll.txt", sep = "\t") %>%
   data.frame(row.names = 1)
 
 # create our base Seurat object, discarding cells that have less than 100 genes
-# and discarding genes that are expressed in less than 3 cells. 
-Seurat_object <- Seurat::CreateSeuratObject(DGEmatrix, assay = "RNA",
-                                    min.cells = 3, min.features = 100,
-                                    project = "Mccarroll_retina")
+# and discarding genes that are expressed in less than 3 cells.
+Seurat_object <- Seurat::CreateSeuratObject(DGEmatrix,
+  assay = "RNA",
+  min.cells = 3, min.features = 100,
+  project = "McCarroll_retina"
+)
 
 # number of genes and cells
 dim(DGEmatrix)
@@ -55,23 +57,27 @@ counts <- Seurat::GetAssayData(Seurat_object, assay = "RNA", slot = "counts")
 mito.genes <- grep("^MT-", rownames(counts), value = TRUE)
 
 # compute proportions - measurement of mitochondrial gene proportion
-percent.mito <- Matrix::colSums(counts[mito.genes,]) /
+percent.mito <- Matrix::colSums(counts[mito.genes, ]) /
   Matrix::colSums(counts)
 
 # add the information back to the seurat object
-Seurat_object <- AddMetaData(object = Seurat_object, metadata = percent.mito,
-                             col.name = "percent.mito")
+Seurat_object <- Seurat::AddMetaData(
+  object = Seurat_object, metadata = percent.mito,
+  col.name = "percent.mito"
+)
 
 # get a list of crystal genes (all genes starting by 'CRY') to remove crystalin contamination
 crystal.genes <- grep("^CRY[AB]", rownames(x = Seurat_object@assays$RNA), value = TRUE)
 
 # compute proportions
-percent.crystal <- Matrix::colSums(counts[crystal.genes, ]) / 
+percent.crystal <- Matrix::colSums(counts[crystal.genes, ]) /
   Matrix::colSums(counts)
 
 # add the information back to the seurat object
-Seurat_object <- AddMetaData(object = Seurat_object, metadata = percent.crystal,
-                             col.name = "percent.crystal")
+Seurat_object <- Seurat::AddMetaData(
+  object = Seurat_object, metadata = percent.crystal,
+  col.name = "percent.crystal"
+)
 
 # display distribution of some metrics:
 # # of genes, # of UMIs, and mitochondrial/crystal proportion
@@ -101,12 +107,13 @@ summary_stats_before_filtering %>% reactable::reactable()
 We saw that the distribution of some metrics showed some low quality cells. Although those are not many cells, they can bother for clustering and cell-type identification. Let's get rid of the worst offenders, and recompute QC metrics
 
 ```{r}
-# We'll define some cutoffs to remove cells that deviate too much from the rest of the
+# We'll define specific cutoffs to remove cells that deviate too much from the rest of the
 # cells in the sample. These can be hard cut-offs or dataset-specific ones based on SD.
 # Sometimes those represent multiplets, or just abnormal cells like crystalin cells
-Seurat_object <- subset(Seurat_object,  subset = nFeature_RNA > 100 & nFeature_RNA < 6000 & 
-                          nCount_RNA < 10000 & percent.mito < 0.10 & percent.crystal < 0.025)
-VlnPlot(object = Seurat_object, pt.size = 0, ncol = 4, features = fts)
+Seurat_object <- subset(Seurat_object, subset = nFeature_RNA > 100 & nFeature_RNA < 6000 &
+  nCount_RNA < 10000 & percent.mito < 0.10 & percent.crystal < 0.025)
+
+Seurat::VlnPlot(object = Seurat_object, pt.size = 0, ncol = 4, features = fts)
 ```
 
 ```{r}
@@ -123,16 +130,17 @@ summary_stats_after_filtering <- tibble(
   min_UMI      = min(Seurat_object@meta.data$nCount_RNA)
 ) %>% mutate_all(function(x) round(x, 2))
 
-summary_stats_after_filtering %>% reactable()
+summary_stats_after_filtering %>% reactable::reactable()
 ```
 
 ------------------------------------------------------------------------
 
 ```{r}
 print(
-  paste0("Number of filtered cells: ",
-         summary_stats_before_filtering$total_cells -
-           summary_stats_after_filtering$total_cells
+  paste0(
+    "Number of filtered cells: ",
+    summary_stats_before_filtering$total_cells -
+      summary_stats_after_filtering$total_cells
   )
 )
 ```
@@ -143,25 +151,27 @@ Not much was removed, only a few outlier cells, because this was a quite good qu
 
 ## Normalization
 
-Normalize the dataset using [SCTransform](https://satijalab.org/seurat/articles/sctransform_vignette.html)
-
 ```{r}
 # normalize dataset
-Seurat_object <- NormalizeData(Seurat_object)
+Seurat_object <- Seurat::NormalizeData(Seurat_object)
 
 # before proceeding, we note markers for cell cycle
-Seurat_object <- CellCycleScoring(Seurat_object, set.ident = FALSE,
-                                  s.features = cc.genes$s.genes,
-                                  g2m.features = cc.genes$g2m.genes)
+Seurat_object <- Seurat::CellCycleScoring(Seurat_object,
+  set.ident = FALSE,
+  s.features = cc.genes$s.genes,
+  g2m.features = cc.genes$g2m.genes
+)
 
-# we then go on to apply a transforms the data and regresses out unwanted variation
+# we then go on to apply a transformation of the data and regresses out unwanted variation
 vs <- c("nFeature_RNA", "percent.mito", "S.Score", "G2M.Score")
-Seurat_object <- SCTransform(Seurat_object, verbose = T,
-                             vars.to.regress = vs)
+Seurat_object <- Seurat::SCTransform(Seurat_object,
+  verbose = T,
+  vars.to.regress = vs
+)
 
-FeatureScatter(Seurat_object, feature1 = "nCount_RNA", feature2 = "percent.mito") +
+Seurat::FeatureScatter(Seurat_object, feature1 = "nCount_RNA", feature2 = "percent.mito") +
   FeatureScatter(Seurat_object, feature1 = "nCount_RNA", feature2 = "nFeature_RNA") &
-  theme(legend.position = 'none')
+  theme(legend.position = "none")
 ```
 
 ------------------------------------------------------------------------
@@ -174,46 +184,46 @@ We will perform a first dimension reduction by using only the most variable gene
 
 ```{r}
 # a bit of wrangling to prepare for VariableFeaturePlot
-Seurat_object[['SCT']]@meta.features <- SCTResults(Seurat_object[['SCT']], slot = 'feature.attributes')[, c('gmean', 'variance', 'residual_variance')]
-Seurat_object[['SCT']]@meta.features$variable <- F
-Seurat_object[['SCT']]@meta.features[VariableFeatures(Seurat_object[['SCT']]), 'variable'] <- F
+Seurat_object[["SCT"]]@meta.features <- SCTResults(Seurat_object[["SCT"]], slot = "feature.attributes")[, c("gmean", "variance", "residual_variance")]
+Seurat_object[["SCT"]]@meta.features$variable <- F
+Seurat_object[["SCT"]]@meta.features[VariableFeatures(Seurat_object[["SCT"]]), "variable"] <- F
 colnames(Seurat_object[["SCT"]]@meta.features) <- paste0("sct.", colnames(Seurat_object[["SCT"]]@meta.features))
 
 # label top 10 most variable features
-VariableFeaturePlot(Seurat_object, selection.method = 'sct', assay = 'SCT') %>%
+Seurat::VariableFeaturePlot(Seurat_object, selection.method = "sct", assay = "SCT") %>%
   LabelPoints(points = head(VariableFeatures(Seurat_object), 10), repel = T) &
-  theme(legend.position = 'none')
+  theme(legend.position = "none")
 ```
 
 ------------------------------------------------------------------------
 
 ```{r}
 # perform PCA
-Seurat_object <- RunPCA(Seurat_object, pcs.compute = 100, do.print = F)
+Seurat_object <- Seurat::RunPCA(Seurat_object, pcs.compute = 100, do.print = F)
 
 # display genes correlated with PCs 1 & 2
-VizDimLoadings(Seurat_object, dims = 1:2, reduction = "pca")
+Seurat::VizDimLoadings(Seurat_object, dims = 1:2, reduction = "pca")
 ```
 
 ------------------------------------------------------------------------
 
 ```{r}
 # alternative representation of genes highly correlated with PC1
-DimHeatmap(Seurat_object, dims = 1:15, cells = 500, balanced = T)
+Seurat::DimHeatmap(Seurat_object, dims = 1:15, cells = 500, balanced = T)
 ```
 
 ------------------------------------------------------------------------
 
 ```{r}
 # inspect the standard deviation of each PC
-ElbowPlot(Seurat_object)
+Seurat::ElbowPlot(Seurat_object)
 ```
 
 ------------------------------------------------------------------------
 
 ```{r}
 # assess effect of cell cycle
-DimPlot(Seurat_object, reduction = "pca", group.by = "Phase")
+Seurat::DimPlot(Seurat_object, reduction = "pca", group.by = "Phase")
 ```
 
 ------------------------------------------------------------------------
@@ -221,8 +231,8 @@ DimPlot(Seurat_object, reduction = "pca", group.by = "Phase")
 ### Non-linear approaches
 
 ```{r,message=FALSE,warning=FALSE}
-Seurat_object <- RunUMAP(Seurat_object, dims = 1:20)
-Seurat_object <- RunTSNE(Seurat_object, dims = 1:20)
+Seurat_object <- Seurat::RunUMAP(Seurat_object, dims = 1:20)
+Seurat_object <- Seurat::RunTSNE(Seurat_object, dims = 1:20)
 ```
 
 ------------------------------------------------------------------------
@@ -231,13 +241,15 @@ Seurat_object <- RunTSNE(Seurat_object, dims = 1:20)
 
 ```{r}
 # cluster the cells based on UMAP reduction
-Seurat_object <- FindNeighbors(Seurat_object, 
-                               dims = 1:2, 
-                               reduction = "umap")
+Seurat_object <- Seurat::FindNeighbors(Seurat_object,
+  dims = 1:2,
+  reduction = "umap"
+)
 # the resolution can be adjusted to tweak clustering accuracy
-Seurat_object <- FindClusters(Seurat_object, 
-                              resolution = 0.5, 
-                              reduction = "umap")
+Seurat_object <- Seurat::FindClusters(Seurat_object,
+  resolution = 0.5,
+  reduction = "umap"
+)
 ```
 
 ------------------------------------------------------------------------
@@ -245,7 +257,7 @@ Seurat_object <- FindClusters(Seurat_object,
 ### UMAP
 
 ```{r}
-DimPlot(Seurat_object, reduction = "umap", label = T)
+Seurat::DimPlot(Seurat_object, reduction = "umap", label = T)
 ```
 
 ------------------------------------------------------------------------
@@ -253,7 +265,7 @@ DimPlot(Seurat_object, reduction = "umap", label = T)
 ### tSNE
 
 ```{r}
-DimPlot(Seurat_object, reduction = "tsne", label = T)
+Seurat::DimPlot(Seurat_object, reduction = "tsne", label = T)
 ```
 
 ------------------------------------------------------------------------
@@ -262,7 +274,7 @@ DimPlot(Seurat_object, reduction = "tsne", label = T)
 
 ::: superbigimage
 ```{r,fig.width=15,fig.height=10}
-VlnPlot(object = Seurat_object, pt.size = 0.1, ncol = 1, features = fts)
+Seurat::VlnPlot(object = Seurat_object, pt.size = 0.1, ncol = 1, features = fts)
 ```
 :::
 
@@ -273,20 +285,24 @@ VlnPlot(object = Seurat_object, pt.size = 0.1, ncol = 1, features = fts)
 We now have some clusters of cells (cell populations), but we still don't know what these cells are. One can apply differential expression analysis to find marker genes higher expressed in every given cluster as compared to all remaining cells, and then infer the cell type based on current knowledge on those genes.
 
 ```{r}
-Seurat_object.markers <- FindAllMarkers(Seurat_object, only.pos = TRUE,
-                                        min.pct = 0.25, logfc.threshold = 0.25)
-head(Seurat_object.markers) %>% reactable()
+Seurat_object.markers <- Seurat::FindAllMarkers(Seurat_object,
+  only.pos = TRUE,
+  min.pct = 0.25, logfc.threshold = 0.25
+)
+head(Seurat_object.markers) %>% reactable::reactable()
 ```
 
 We can take a look at the top 10 markers in each cluster
 
 ::: superbigimage
 ```{r,fig.width=20,fig.height=8}
-top10 <- Seurat_object.markers %>% 
-  group_by(cluster) %>% 
+# get top 10 markers in each cluster
+top10 <- Seurat_object.markers %>%
+  group_by(cluster) %>%
   slice_max(avg_log2FC, n = 10) %>%
   ungroup()
-DotPlot(
+# plot
+Seurat::DotPlot(
   Seurat_object,
   assay = NULL,
   unique(top10$gene),
@@ -310,35 +326,35 @@ Alternatively, one could directly use known marker genes or published expression
 
 ```{r}
 markers.retina.dotplot <- toupper(c(
-  "Rho",  #Rods
-  "Opn1mw", #Cones
-  "Trpm1", #Bipolar cells
-  "Scgn", #Bipolar cells
-  "Celf4", #Amacrine cells
-  "Rgs5", #Pericytes
-  "Cldn5", #Endothelial cells
-  "Lyz2", #Immune cells
+  "Rho", # Rods
+  "Opn1mw", # Cones
+  "Trpm1", # Bipolar cells
+  "Scgn", # Bipolar cells
+  "Celf4", # Amacrine cells
+  "Rgs5", # Pericytes
+  "Cldn5", # Endothelial cells
+  "Lyz2", # Immune cells
   "Glul", # Muller glia
-  "Gfap", #Astrocytes
-  "Optc", #Lens cells
-  "Lhx1"  #Horizontal cells
+  "Gfap", # Astrocytes
+  "Optc", # Lens cells
+  "Lhx1" # Horizontal cells
 ))
 ```
 
 #### Example
 
 ```{r}
-Seurat_object <- MacCarroll_dataset$seurat
+Seurat::DefaultAssay(Seurat_object) <- "RNA"
 
-DefaultAssay(Seurat_object) <- 'RNA'
-FeaturePlot(Seurat_object, features = 'TRPM1', reduction = 'umap')
+Seurat::FeaturePlot(Seurat_object, features = "TRPM1", reduction = "umap")
 ```
 
 #### Dot plots
 
 ```{r}
-DefaultAssay(Seurat_object) <- 'SCT'
-DotPlot(
+Seurat::DefaultAssay(Seurat_object) <- "SCT"
+
+Seurat::DotPlot(
   Seurat_object,
   assay = NULL,
   markers.retina.dotplot,
@@ -358,53 +374,377 @@ DotPlot(
 #### Violin plots
 
 ```{r}
-DefaultAssay(Seurat_object) <- 'SCT'
-VlnPlot(object = Seurat_object, features = markers.retina.dotplot, pt.size = 0.1, stack=TRUE)
+Seurat::DefaultAssay(Seurat_object) <- "SCT"
+
+Seurat::VlnPlot(object = Seurat_object, features = markers.retina.dotplot, pt.size = 0.1, stack = TRUE)
 ```
+
+## save McCarroll retina dataset
+```{r,eval=FALSE}
+Seurat_object_McCarroll_WT <- Seurat_object
+Seurat_object_McCarroll_WT[["Dataset"]] <- "McCarroll_WT"
+
+save(Seurat_object_McCarroll_WT, file = "~/Documents/scPipeline/scratch/retinaData/processed2025/Seurat_object_McCarroll_WT.RData")
+```
+
 
 ------------------------------------------------------------------------
 
-## Annotation
+# Joyal retina datasets
 
-Assigning cluster labels based on the provided information
+Analyze healthy and diseased (retinopathy (RT)) mouse retina scRNA-seq datasets from the Joyal lab using the same workflow.
 
-```{r,message=FALSE,warning=FALSE,eval=FALSE}
-DefaultAssay(Seurat_object) <- 'SCT'
-Seurat_object <- SetIdent(Seurat_object, cells = NULL, value="seurat_clusters")
-new.cluster.ids <- c("",     # cluster 0
-                     "",     # cluster 1
-                     "",     # cluster 2
-                     "",     # cluster 3
-                     "",     # cluster 4
-                     "",     # cluster 5
-                     "",     # cluster 6
-                     "",     # cluster 7
-                     "",     # cluster 8
-                     "",     # cluster 9
-                     "",     # cluster 10
-                     "",     # cluster 11
-                     "",     # cluster 12
-                     "",     # cluster 13
-                     "",     # cluster 14
-                     "",     # cluster 15
-                     "",     # cluster 16
-                     "",     # cluster 17
-                     "",     # cluster 18
-                     "",     # cluster 19
-                     ""      # cluster 20
-)
-names(new.cluster.ids) <- levels(Seurat_object)
-Seurat_object <- RenameIdents(Seurat_object, new.cluster.ids)
+```{r}
+# load function
+source("~/Documents/scPipeline/scAnalyze.R", echo = FALSE)
 
-Seurat_object[["Cell_Type"]] <- Idents(object = Seurat_object)
+McCarroll_WT_res <- scAnalyze(mat = "~/Documents/scPipeline/scratch/retinaData/Dropseq_p14_retina_Mccarroll.txt", proj_name = "McCarroll_WT")
+Seurat_object_McCarroll_WT <- McCarroll_WT_res$seurat
+Seurat_object_McCarroll_WT[["Dataset"]] <- "McCarroll_WT"
+save(Seurat_object_McCarroll_WT,file="~/Documents/scPipeline/scratch/retinaData/processed2025/Seurat_object_McCarroll_WT.RData")
 
-DimPlot(Seurat_object, reduction = "umap", label = T)
+Joyal_WT_res <- scAnalyze(mat = "~/Documents/scPipeline/scratch/retinaData/Dropseq_p14_retina_Joyal.txt", proj_name = "Joyal_WT")
+Seurat_object_Joyal_WT <- Joyal_WT_res$seurat
+Seurat_object_Joyal_WT[["Dataset"]] <- "Joyal_WT"
+save(Seurat_object_Joyal_WT,file="~/Documents/scPipeline/scratch/retinaData/processed2025/Seurat_object_Joyal_WT.RData")
+
+Joyal_RT_res <- scAnalyze(mat = "~/Documents/scPipeline/scratch/retinaData/Dropseq_p14_retina_Joyal.txt", proj_name = "Joyal_retinopathy")
+Seurat_object_RT <- Joyal_RT_res$seurat
+Seurat_object_RT[["Dataset"]] <- "Joyal_RT"
+save(Seurat_object_RT,file="~/Documents/scPipeline/scratch/retinaData/processed2025/Seurat_object_RT.RData")
 ```
 
-# test
-```{r}
-MacCarroll_dataset <- run_scRNAseq(mat = "~/Documents/HGEN_663/extra/lec8/Dropseq_p14_retina_Mccarroll.txt",proj_name = "Mccarroll_retina")
+# Finding retinopathy-specific cluster
 
-MacCarroll_dataset
+## Integrating datasets
+```{r}
+set.seed(42)
+
+# merge all datasets
+Seurat_object <- Seurat:::merge.SCTAssay(Seurat_object_McCarroll_WT, 
+                               y = c(Seurat_object_Joyal_WT, Seurat_object_RT),
+                               add.cell.ids = NULL,
+                               project = "merged_retina_dat")
+
+# before proceeding, we note markers for cell cycle
+Seurat_object <- CellCycleScoring(Seurat_object, set.ident = FALSE,
+                                  s.features = cc.genes$s.genes,
+                                  g2m.features = cc.genes$g2m.genes)
+
+# split by dataset and apply SC transform again
+Seurat_object.list <- Seurat::SplitObject(Seurat_object, split.by = "Dataset") %>%
+  lapply(SCTransform, verbose = F, vars.to.regress = c("nFeature_RNA", "percent.mito", "S.Score", "G2M.Score"))
+
+# select most consistently variable features
+Seurat_object.features <- Seurat::SelectIntegrationFeatures(
+  object.list = Seurat_object.list,
+  nfeatures = 3000
+)
+
+# prepare Seurat object for integration
+Seurat_object.list <- Seurat::PrepSCTIntegration(
+  object.list = Seurat_object.list,
+  anchor.features = Seurat_object.features
+)
+
+# identify anchors shared by the datasets
+Seurat_object.anchors <- Seurat::FindIntegrationAnchors(object.list = Seurat_object.list,
+                                                normalization.method = "SCT", 
+                                                anchor.features = Seurat_object.features)
+
+# proceed with integration
+integratedSeuratObject <- Seurat::IntegrateData(anchorset = Seurat_object.anchors,
+                               normalization.method = "SCT")
+
+save(integratedSeuratObject,file="~/Documents/scPipeline/scratch/retinaData/processed_priorTo2025/stable/integratedSeuratObject.RData")
+
+DefaultAssay(integratedSeuratObject) <- "integrated"
+```
+
+## Add metadata info regarding cell condition
+```{r}
+load("~/Documents/scPipeline/scratch/retinaData/processed_priorTo2025/stable/integratedSeuratObject.RData")
+
+integratedSeuratObject[["Condition"]] <-plyr::mapvalues(
+ x = integratedSeuratObject$Dataset, 
+ from = c("McCarroll_WT", "Joyal_WT", "Joyal_RT"), 
+ to = c("WT", "WT", "RT"))
+```
+
+
+## Dimension reduction and clustering {.tabset}
+```{r}
+# dimension reduction
+integratedSeuratObject <- Seurat::RunPCA(integratedSeuratObject) %>%
+  RunUMAP(dims = 1:20) %>%
+  RunTSNE(dims = 1:20)
+
+# run clustering based on the UMAP space
+integratedSeuratObject <- Seurat::FindNeighbors(integratedSeuratObject, 
+                               dims = 1:2, 
+                               reduction = "umap",
+                               k.param = 20) 
+integratedSeuratObject <- Seurat::FindClusters(integratedSeuratObject, 
+                              resolution = 0.5, 
+                              reduction = "umap")
+```
+
+### Plot {.tabset}
+
+#### Together 
+```{r}
+Seurat::DimPlot(integratedSeuratObject,
+                label = T, 
+                reduction = "umap")
+```
+
+#### Split
+```{r}
+Seurat::DimPlot(integratedSeuratObject,
+                label = T, 
+                reduction = "umap",
+                split.by="Dataset")
+```
+
+## Re-tuning the clustering
+
+### Elbow plot
+```{r}
+ElbowPlot(integratedSeuratObject, ndims = 100)
+```
+
+### Re-tuning
+
+It seems like only the first 7 PCs contain the majority of the variation. I will tweak the UMAP and TSNE to only use the first 7 PCs.
+
+```{r}
+# dimension reduction
+integratedSeuratObject <- Seurat::RunPCA(integratedSeuratObject) %>%
+  RunUMAP(dims = 1:7) %>%
+  RunTSNE(dims = 1:7)
+
+# run clustering based on the UMAP space
+integratedSeuratObject <- Seurat::FindNeighbors(integratedSeuratObject, 
+                               dims = 1:2, 
+                               reduction = "umap",
+                               k.param = 20)
+integratedSeuratObject <- Seurat::FindClusters(integratedSeuratObject, 
+                              resolution = 0.5, 
+                              reduction = "umap")
+```
+
+### Plot
+
+#### Together 
+```{r}
+Seurat::DimPlot(integratedSeuratObject,
+                label = T, 
+                reduction = "umap")
+```
+
+#### Split
+```{r}
+Seurat::DimPlot(integratedSeuratObject,
+                label = T, 
+                reduction = "umap",
+                split.by="Dataset")
+```
+
+#### By condition
+```{r}
+Seurat::DimPlot(integratedSeuratObject,
+                label = T, 
+                reduction = "umap",
+                group.by = "Condition")
+```
+
+## Annotating clusters
+
+### Identify cell types using known marker genes 
+```{r}
+#known marker genes
+markers.retina.dotplot <- toupper(c(
+  "Rho",  #Rods
+  "Opn1mw", #Cones
+  "Trpm1", #Bipolar cells
+  "Scgn", #Bipolar cells
+  "Celf4", #Amacrine cells
+  "Rgs5", #Pericytes
+  "Cldn5", #Endothelial cells
+  "Lyz2", #Immune cells
+  "Glul", #Muller glia
+  "Gfap", #Astrocytes
+  "Optc", #Lens cells
+  "Lhx1"  #Horizontal cells
+))
+
+# plot the expression of our marker genes according to cluster
+DotPlot(
+  integratedSeuratObject,
+  assay = NULL,
+  markers.retina.dotplot,
+  cols = c("blue", "red"),
+  col.min = -2.5,
+  col.max = 2.5,
+  dot.min = 0,
+  dot.scale = 6,
+  group.by = NULL,
+  split.by = NULL,
+  scale.by = "radius",
+  scale.min = NA,
+  scale.max = NA
+) + theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = .5))
+```
+
+### Annotate clusters based on known marker genes
+```{r}
+# annotation
+integratedSeuratObject <- SetIdent(integratedSeuratObject, cells = NULL, value="seurat_clusters")
+new.cluster.ids <- c("Muller glia",     # cluster 0
+                     "Rods",     # cluster 1
+                     "Rods",     # cluster 2
+                     "Rods",     # cluster 3
+                     "Bipolar cells 2",     # cluster 4
+                     "Rods",     # cluster 5
+                     "Rods",     # cluster 6
+                     "Cones",     # cluster 7
+                     "Rods",     # cluster 8
+                     "Rods",     # cluster 9
+                     "Rods",     # cluster 10
+                     "Rods",     # cluster 11
+                     "Bipolar cells 3",     # cluster 12
+                     "Rods",     # cluster 13
+                     "Rods",     # cluster 14
+                     "Bipolar cells 1",     # cluster 15
+                     "Bipolar cells 5",     # cluster 16
+                     "Bipolar cells 7",     # cluster 17
+                     "Amacrine cells 5",     # cluster 18
+                     "Bipolar cells 9",     # cluster 19
+                     "Bipolar cells 4",     # cluster 20
+                     "Amacrine cells 4",     # cluster 21
+                     "Muller Glia",     # cluster 22
+                     "Horizontal cells",     # cluster 23
+                     "Amacrine cells 7",     # cluster 24
+                     "Amacrine cells 3",     # cluster 25
+                     "Amacrine cells 3"     # cluster 26
+                     
+)
+names(new.cluster.ids) <- levels(integratedSeuratObject)
+
+integratedSeuratObject <- RenameIdents(integratedSeuratObject, new.cluster.ids)
+
+integratedSeuratObject[["Cell_Type"]] <- Idents(object = integratedSeuratObject)
+```
+
+### Plot {.tabset}
+
+#### Together
+```{r}
+DimPlot(integratedSeuratObject, reduction = "umap", label = T) + NoLegend()
+```
+
+#### Split
+```{r}
+DimPlot(integratedSeuratObject, reduction = "umap", label = T,split="Dataset") + NoLegend()
+```
+
+## Subsetting cells previously shown to be implicated in the retinopathy condition
+
+Binet et al. (2020) reported that endothelial cells, muller glia cells and immune cells are implicated in the retinopathy condition
+
+```{r}
+# from Binet et al. (2020) (1), it appears that endothelial cells, muller glia cells and immune cells are implicated in the retinopathy condition
+#subset these cells
+subset_muller_seuratObject <-subset(integratedSeuratObject, subset = Cell_Type == c("Muller glia"))
+
+# test.subset.muller <- subset(x = integratedSeuratObject, subset = Cell_Type == c("Muller glia"))
+# DefaultAssay(test.subset.muller)
+# 
+# #differential expression between cases and control for muller glia -- set idents
+# DefaultAssay(test.subset.muller) <- 'RNA'
+# Idents(test.subset.muller) <- test.subset.muller$status
+
+# #find markers
+# deg_muller <- FindMarkers(test.subset.muller, ident.1 ="Retinopathy", ident.2 = "normal" )
+# head(deg_muller)
+
+#feature plot for top 5 DEGs between cases and control
+# DefaultAssay(test.subset.muller) <- 'SCT'
+# FeaturePlot(test.subset.muller, features = c('NDUFA4L2'), reduction = 'umap', split.by = "status")
+
+
+#differential expression between cases and control for muller glia -- set idents
+DefaultAssay(subset_muller_seuratObject) <- 'RNA'
+Idents(subset_muller_seuratObject) <- subset_muller_seuratObject$Condition
+
+#find markers
+DEG_muller <- FindMarkers(subset_muller_seuratObject, ident.1 ="RT", ident.2 = "WT")
+
+head(DEG_muller)
+```
+
+### Differential expression analysis of top 5 markers in Muller glia cells {.tabset}
+
+#### NDUFA4L2
+```{r}
+DefaultAssay(subset_muller_seuratObject) <- 'RNA'
+FeaturePlot(subset_muller_seuratObject, features = c('NDUFA4L2'), reduction = 'umap', split.by = "Condition")
+```
+
+#### CRYAA
+```{r}
+FeaturePlot(subset_muller_seuratObject, features = c('CRYAA'), reduction = 'umap', split.by = "Condition")
+```
+
+#### GM26924
+```{r}
+FeaturePlot(subset_muller_seuratObject, features = c('GM26924'), reduction = 'umap', split.by = "Condition")
+```
+
+#### MALAT1
+```{r}
+FeaturePlot(subset_muller_seuratObject, features = c('MALAT1'), reduction = 'umap', split.by = "Condition")
+```
+
+#### DCLK1
+```{r}
+FeaturePlot(subset_muller_seuratObject, features = c('DCLK1'), reduction = 'umap', split.by = "Condition")
+```
+
+
+
+
+
+
+
+### Violint plots of DEGs of top 5 markers in Muller glia cells
+```{r}
+DefaultAssay(subset_muller_seuratObject) <- 'RNA'
+VlnPlot(subset_muller_seuratObject, features = c('NDUFA4L2', "GM26924", "DCLK1", "CRYAA", "MALAT1"), split.by = "Condition", group.by = "Cell_Type", pt.size = 0, combine = T)
+```
+
+### Run cluster and viz
+```{r}
+DefaultAssay(subset_muller_seuratObject) <- 'integrated'
+
+ElbowPlot(subset_muller_seuratObject)
+
+# dimension reduction
+subset_muller_seuratObject <- Seurat::RunPCA(subset_muller_seuratObject) %>%
+  RunUMAP(dims = 1:3) %>%
+  RunTSNE(dims = 1:3)
+
+# run clustering based on the UMAP space
+subset_muller_seuratObject <- Seurat::FindNeighbors(subset_muller_seuratObject, 
+                               dims = 1:2, 
+                               reduction = "umap",
+                               k.param = 10)
+subset_muller_seuratObject <- Seurat::FindClusters(subset_muller_seuratObject, 
+                              resolution = 2.0, 
+                              reduction = "umap")
+
+DimPlot(subset_muller_seuratObject, reduction = "umap", label=TRUE, split.by = "Dataset")
+
+DimPlot(subset(subset_muller_seuratObject,idents=c("22")),label = T,split.by = "Dataset",reduction="umap", pt.size = 2) + NoLegend()
 ```
 
